@@ -21,6 +21,8 @@
 
     var switching = false;
     var courseDoneCount = parseInt(localStorage.getItem('eap_done_count') || '0');
+    var videoHasPlayed = false;       // 标记：本轮是否真正开始播放过视频
+    var currentEpisodeId = null;      // 追踪当前集ID，防止重复切换
 
     function log(msg) {
         console.log('%c[自动连播] ' + msg, 'color: #22c55e; font-weight: bold');
@@ -293,27 +295,32 @@
             if (episodes[i].isCurrent) { current = episodes[i]; break; }
         }
 
-        // 更新面板
+        // 更新面板（每次都刷新显示）
         renderVideoPanel(episodes, courseTitle);
 
         if (!current || switching) return;
 
-        // 判断当前集是否完成
         var video = document.querySelector('video');
-        var videoEnded = video && (video.ended || (video.duration > 0 && video.currentTime >= video.duration - 2));
-        var progressDone = current.progress >= 100;
+        if (!video) return;
 
-        if (!videoEnded && !progressDone) return;
+        // 如果视频正在播放（currentTime > 0 且未暂停），标记为"已开始播放"
+        if (video.currentTime > 1 && !video.paused) {
+            videoHasPlayed = true;
+        }
 
-        log('"' + current.title + '" 已完成');
+        // 核心判断：只有视频在本次会话中真正播放过，并且播放到了结尾，才切换
+        // 不使用 progressDone（之前看过的100%不算），只用 videoEnded
+        var videoEnded = videoHasPlayed && video.ended;
+
+        if (!videoEnded) return;
+
+        log('"' + current.title + '" 播放完毕，准备切换');
 
         // 找下一个未完成的
         var next = null;
-        // 优先当前之后
         for (var j = current.index + 1; j < episodes.length; j++) {
             if (episodes[j].progress < 100) { next = episodes[j]; break; }
         }
-        // 没有则从头找
         if (!next) {
             for (var k = 0; k < episodes.length; k++) {
                 if (episodes[k].progress < 100) { next = episodes[k]; break; }
@@ -321,6 +328,8 @@
         }
 
         if (next) {
+            // 重置播放标记，等待新一集开始
+            videoHasPlayed = false;
             setTimeout(function() { switchToEpisode(next); }, SWITCH_DELAY);
         } else {
             courseAllDone();
@@ -421,19 +430,18 @@
     // ================================================================
 
     function dismissDialogs() {
+        // 只处理明确可见的弹窗按钮，不触发刷新
         var btns = document.querySelectorAll('button');
         for (var i = 0; i < btns.length; i++) {
             var t = btns[i].textContent.trim();
-            if ((t === '继续学习' || t === '继续' || t === '确定') && btns[i].offsetHeight > 0) {
+            if (t !== '继续学习') continue;
+            // 确保按钮是可见的弹窗里的，不是页面普通按钮
+            var dialog = btns[i].closest('.el-dialog, .dialog-box, [role="dialog"]');
+            if (dialog && dialog.offsetHeight > 0) {
                 btns[i].click();
                 log('关闭弹窗: ' + t);
                 return;
             }
-        }
-        var dc = document.querySelector('.dialog-content');
-        if (dc && dc.textContent.indexOf('异常') > -1) {
-            log('异常弹窗，刷新');
-            location.reload();
         }
     }
 
@@ -463,8 +471,17 @@
         createPanel();
 
         if (isVideoPage) {
-            setInterval(videoPageLoop, CHECK_MS);
-            videoPageLoop();
+            // 不立即执行第一次检查，等视频开始播放后再检测
+            // 首次只更新面板显示
+            var episodes = getEpisodes();
+            var courseTitle = getCourseTitle();
+            renderVideoPanel(episodes, courseTitle);
+            log('首次面板已渲染，等待视频播放...');
+            // 10秒后才开始真正的自动检测循环，给视频足够加载时间
+            setTimeout(function() {
+                log('自动检测循环启动');
+                setInterval(videoPageLoop, CHECK_MS);
+            }, 10000);
         } else if (isListPage) {
             setInterval(listPageLoop, CHECK_MS);
             listPageLoop();
