@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Online Course Auto-Play Assistant
 // @namespace    online-course-autoplay
-// @version      2.2
+// @version      2.3
 // @description  Auto-play next episode when current one finishes, with a floating progress panel
 // @match        https://study.enaea.edu.cn/viewerforccvideo*
 // @match        https://study.enaea.edu.cn/viewerforicourse*
@@ -69,7 +69,7 @@
 
         var s = document.createElement('style');
         s.textContent = [
-            '#eap-panel{position:fixed;z-index:999999;width:260px;font-family:"Microsoft YaHei",sans-serif;font-size:13px;color:#e2e8f0;border-radius:10px;overflow:hidden;box-shadow:0 8px 30px rgba(0,0,0,.45);background:linear-gradient(145deg,#1e293b 0%,#0f172a 100%);border:1px solid rgba(255,255,255,.08)}',
+            '#eap-panel{position:fixed;z-index:2147483647!important;width:260px;font-family:"Microsoft YaHei",sans-serif;font-size:13px;color:#e2e8f0;border-radius:10px;overflow:hidden;box-shadow:0 8px 30px rgba(0,0,0,.45);background:linear-gradient(145deg,#1e293b 0%,#0f172a 100%);border:1px solid rgba(255,255,255,.08)}',
             '#eap-panel *{margin:0;padding:0;box-sizing:border-box}',
             '#eap-header{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:rgba(0,0,0,.25);cursor:move;user-select:none}',
             '#eap-title{font-weight:600;font-size:14px;color:#22c55e}',
@@ -100,7 +100,7 @@
             '.eap-course-pct{flex-shrink:0;font-size:11px;color:#64748b;min-width:36px;text-align:right}'
         ].join('\n');
         document.documentElement.appendChild(s);
-        document.body.appendChild(panel);
+        document.documentElement.appendChild(panel);
 
         panel.style.top = (savedPos.top || 20) + 'px';
         panel.style.left = (savedPos.left || 20) + 'px';
@@ -331,6 +331,21 @@
         var video = getVideo();
         if (!video || video.duration <= 0) return;
 
+        // 视频暂停了就自动播放
+        if (video.paused && !video.ended) {
+            log('视频已暂停，尝试自动播放');
+            video.play().catch(function() {
+                log('play()被拒绝，尝试点击播放按钮');
+                var startBtn = document.querySelector('.xgplayer-start');
+                var playBtn = document.querySelector('.xgplayer-play');
+                if (startBtn && startBtn.offsetHeight > 0) {
+                    startBtn.click();
+                } else if (playBtn) {
+                    playBtn.click();
+                }
+            });
+        }
+
         // 标记视频已开始播放
         if (video.currentTime > 1 && !video.paused) {
             videoHasPlayed = true;
@@ -366,7 +381,6 @@
     //  课程列表页逻辑
     // ================================================================
 
-    var listTabClicked = false;
     var listCourseClicked = false;
 
     function listPageLoop() {
@@ -387,37 +401,45 @@
             localStorage.removeItem('eap_course_done');
         }
 
-        // 切到未完成tab（只点一次）
-        if (!listTabClicked) {
-            var tabs = document.querySelectorAll('.customcur-tab-text');
-            if (tabs.length > 1) {
-                tabs[1].click();
-                listTabClicked = true;
-                log('已切换到未完成tab');
-            }
-        }
-
-        // 查找课程列表
-        var rows = document.querySelectorAll('#J_myOptionRecords tbody tr');
-        if (rows.length === 0) {
-            renderListPanel('等待课程列表加载...');
-            return;
-        }
-
+        // 两种页面结构：DataTable 或 div.kc
         var courses = [];
-        rows.forEach(function(row) {
-            var pEl = row.querySelector('.progressvalue');
-            var tEl = row.querySelector('.course-title');
-            var btn = row.querySelector('a.golearn');
-            if (!pEl || !btn) return;
-            var pct = parseInt(pEl.textContent) || 0;
-            var title = tEl ? (tEl.getAttribute('title') || tEl.textContent.trim()) : '';
-            title = title.substring(0, 35);
-            courses.push({ row: row, pct: pct, title: title, btn: btn });
-        });
+
+        // 结构1: DataTable (#J_myOptionRecords)，数据通过AJAX加载
+        var dtRows = document.querySelectorAll('#J_myOptionRecords tbody tr');
+        if (dtRows.length > 0) {
+            dtRows.forEach(function(row) {
+                var tds = row.querySelectorAll('td');
+                if (tds.length <= 1) return; // 跳过分组标题行
+                var pEl = row.querySelector('.progressvalue');
+                var tEl = row.querySelector('.course-title');
+                var btn = row.querySelector('a.golearn');
+                if (!pEl || !btn) return;
+                var pct = parseInt(pEl.textContent) || 0;
+                var title = tEl ? (tEl.getAttribute('title') || tEl.textContent.trim()) : '';
+                title = title.substring(0, 35);
+                courses.push({ pct: pct, title: title, btn: btn });
+            });
+        }
+
+        // 结构2: div.kc（另一种列表页）
+        if (courses.length === 0) {
+            var items = document.querySelectorAll('div.kc');
+            items.forEach(function(item) {
+                var link = item.querySelector('a');
+                var jdEl = item.querySelector('.jd');
+                var strongEl = item.querySelector('strong');
+                if (!link || !link.href) return;
+                if (link.href.indexOf('type=course') === -1) return;
+                var pctText = jdEl ? jdEl.textContent.trim() : '0%';
+                var pct = parseFloat(pctText) || 0;
+                var title = strongEl ? strongEl.textContent.trim() : link.textContent.trim();
+                title = title.substring(0, 35);
+                courses.push({ pct: pct, title: title, btn: link });
+            });
+        }
 
         if (courses.length === 0) {
-            renderListPanel('未找到课程');
+            renderListPanel('等待课程列表加载...');
             return;
         }
 
@@ -433,21 +455,20 @@
 
         if (unfinished) {
             listCourseClicked = true;
-            log('自动选择课程: ' + unfinished.title);
+            log('自动选择课程: ' + unfinished.title + ' (' + unfinished.pct + '%)');
             setTimeout(function() {
-                unfinished.btn.click();
+                // 优先使用 data-vurl 直接导航，回退到 click
+                var vurl = unfinished.btn.getAttribute('data-vurl');
+                if (vurl) {
+                    log('导航到: ' + vurl);
+                    location.href = vurl;
+                } else {
+                    unfinished.btn.click();
+                }
             }, 2000);
         } else {
-            var nextBtn = document.querySelector('#J_myOptionRecords_next');
-            if (nextBtn && !nextBtn.classList.contains('paginate_button_disabled')) {
-                log('当前页全部完成，翻页...');
-                listTabClicked = false;   // 翻页后需要重新点击tab
-                listCourseClicked = false; // 翻页后需要重新选课
-                nextBtn.click();
-            } else {
-                log('所有课程已完成！');
-                renderListPanel('所有课程已完成！');
-            }
+            log('所有课程已完成！');
+            renderListPanel('所有课程已完成！');
         }
     }
 
@@ -456,16 +477,14 @@
     // ================================================================
 
     function dismissDialogs() {
-        var btns = document.querySelectorAll('button');
+        var btns = document.querySelectorAll('button, a.btn, input[type="button"]');
         for (var i = 0; i < btns.length; i++) {
             var t = btns[i].textContent.trim();
-            if (t !== '继续学习') continue;
-            var dialog = btns[i].closest('.el-dialog, .dialog-box, [role="dialog"]');
-            if (dialog && dialog.offsetHeight > 0) {
-                btns[i].click();
-                log('关闭弹窗: ' + t);
-                return;
-            }
+            if (t !== '继续学习' && t !== '确定' && t !== '知道了' && t !== '关闭') continue;
+            if (btns[i].offsetHeight <= 0) continue;
+            btns[i].click();
+            log('关闭弹窗: ' + t);
+            return;
         }
     }
 
@@ -488,36 +507,57 @@
     //  启动
     // ================================================================
 
-    log('脚本启动 v2.2 | 页面: ' + (isVideoPage ? '播放页' : isListPage ? '列表页' : '未知'));
+    log('脚本启动 v2.3 | 页面: ' + (isVideoPage ? '播放页' : isListPage ? '列表页' : '未知'));
 
     setTimeout(function() {
         createPanel();
 
         if (isVideoPage) {
-            var episodes = getEpisodes();
-            var courseTitle = getCourseTitle();
-            renderVideoPanel(episodes, courseTitle);
+            // 阶段1：等待分集列表加载，重试最多5次
+            var phase1Attempts = 0;
+            function phase1() {
+                phase1Attempts++;
+                var episodes = getEpisodes();
+                var courseTitle = getCourseTitle();
+                renderVideoPanel(episodes, courseTitle);
 
-            // 阶段1：如果当前集进度已100%，跳到第一个未完成的集
-            var current = null;
-            for (var i = 0; i < episodes.length; i++) {
-                if (episodes[i].isCurrent) { current = episodes[i]; break; }
-            }
-            if (current && current.progress >= 100) {
-                var next = null;
-                for (var j = 0; j < episodes.length; j++) {
-                    if (episodes[j].progress < 100) { next = episodes[j]; break; }
+                if (episodes.length === 0 && phase1Attempts < 5) {
+                    log('分集列表未加载，第' + phase1Attempts + '次重试...');
+                    setTimeout(phase1, 2000);
+                    return;
                 }
-                if (next) {
-                    log('当前集已完成(' + current.progress + '%)，跳到: ' + next.title);
-                    switchToEpisode(next);
+
+                // 找当前集
+                var current = null;
+                for (var i = 0; i < episodes.length; i++) {
+                    if (episodes[i].isCurrent) { current = episodes[i]; break; }
+                }
+                if (current && current.progress >= 100) {
+                    var next = null;
+                    for (var j = 0; j < episodes.length; j++) {
+                        if (episodes[j].progress < 100) { next = episodes[j]; break; }
+                    }
+                    if (next) {
+                        log('当前集已完成(' + current.progress + '%)，跳到: ' + next.title);
+                        switchToEpisode(next);
+                    } else {
+                        log('所有分集已100%，跳转下一门课');
+                        courseAllDone();
+                    }
                 } else {
-                    log('所有分集已100%，跳转下一门课');
-                    courseAllDone();
+                    log('当前集未完成，正常播放中...');
+                    // 如果当前集进度<100但视频暂停，尝试播放
+                    var video = getVideo();
+                    if (video && video.paused) {
+                        log('视频暂停中，尝试自动播放');
+                        video.play().catch(function() {
+                            var btn = document.querySelector('.xgplayer-start') || document.querySelector('.xgplayer-play');
+                            if (btn) btn.click();
+                        });
+                    }
                 }
-            } else {
-                log('当前集未完成，正常播放中...');
             }
+            phase1();
 
             // 阶段2：启动播放监控循环
             setTimeout(function() {
@@ -528,6 +568,6 @@
             setInterval(listPageLoop, CHECK_MS);
             listPageLoop();
         }
-    }, 3000);
+    }, 5000);
 
 })();
