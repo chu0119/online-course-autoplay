@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Online Course Auto-Play Assistant
 // @namespace    online-course-autoplay
-// @version      2.1
+// @version      2.2
 // @description  Auto-play next episode when current one finishes, with a floating progress panel
 // @match        https://study.enaea.edu.cn/viewerforccvideo*
 // @match        https://study.enaea.edu.cn/viewerforicourse*
@@ -482,7 +482,7 @@
     //  启动
     // ================================================================
 
-    log('脚本启动 v2.1 | 页面: ' + (isVideoPage ? '播放页' : isListPage ? '列表页' : '未知'));
+    log('脚本启动 v2.2 | 页面: ' + (isVideoPage ? '播放页' : isListPage ? '列表页' : '未知'));
 
     setTimeout(function() {
         createPanel();
@@ -491,7 +491,29 @@
             var episodes = getEpisodes();
             var courseTitle = getCourseTitle();
             renderVideoPanel(episodes, courseTitle);
-            log('首次面板已渲染，等待视频播放...');
+
+            // 阶段1：如果当前集进度已100%，跳到第一个未完成的集
+            var current = null;
+            for (var i = 0; i < episodes.length; i++) {
+                if (episodes[i].isCurrent) { current = episodes[i]; break; }
+            }
+            if (current && current.progress >= 100) {
+                var next = null;
+                for (var j = 0; j < episodes.length; j++) {
+                    if (episodes[j].progress < 100) { next = episodes[j]; break; }
+                }
+                if (next) {
+                    log('当前集已完成(' + current.progress + '%)，跳到: ' + next.title);
+                    switchToEpisode(next);
+                } else {
+                    log('所有分集已100%，跳转下一门课');
+                    courseAllDone();
+                }
+            } else {
+                log('当前集未完成，正常播放中...');
+            }
+
+            // 阶段2：启动播放监控循环
             setTimeout(function() {
                 log('自动检测循环启动');
                 setInterval(videoPageLoop, CHECK_MS);
