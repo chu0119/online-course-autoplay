@@ -21,7 +21,6 @@
 
     var switching = false;
     var courseDoneCount = parseInt(localStorage.getItem('eap_done_count') || '0');
-    var videoHasPlayed = false;
     var courseDoneFired = false;       // guard: courseAllDone 只调用一次
 
     function log(msg) {
@@ -328,14 +327,17 @@
 
         if (!current || switching || courseDoneFired) return;
 
-        var video = getVideo();
-        if (!video || video.duration <= 0) return;
+        // 核心判断：当前集进度到100%就切换，不看视频播放位置
+        if (current.progress >= 100) {
+            log('"' + current.title + '" 进度已100%，准备切换');
+            findNextAndSwitch(current, episodes);
+            return;
+        }
 
-        // 视频暂停了就自动播放
-        if (video.paused && !video.ended) {
-            log('视频已暂停，尝试自动播放');
+        // 视频暂停了就自动播放（只为积累观看时长）
+        var video = getVideo();
+        if (video && video.paused && !video.ended) {
             video.play().catch(function() {
-                log('play()被拒绝，尝试点击播放按钮');
                 var startBtn = document.querySelector('.xgplayer-start');
                 var playBtn = document.querySelector('.xgplayer-play');
                 if (startBtn && startBtn.offsetHeight > 0) {
@@ -345,18 +347,9 @@
                 }
             });
         }
+    }
 
-        // 标记视频已开始播放
-        if (video.currentTime > 1 && !video.paused) {
-            videoHasPlayed = true;
-        }
-
-        // 只有本次会话真正播放过，且播放到了结尾才切换
-        var videoEnded = videoHasPlayed && (video.ended || video.currentTime >= video.duration - 1);
-
-        if (!videoEnded) return;
-
-        log('"' + current.title + '" 播放完毕，准备切换');
+    function findNextAndSwitch(current, episodes) {
 
         // 找下一个未完成的
         var next = null;
@@ -370,7 +363,6 @@
         }
 
         if (next) {
-            videoHasPlayed = false;
             setTimeout(function() { switchToEpisode(next); }, SWITCH_DELAY);
         } else {
             courseAllDone();
