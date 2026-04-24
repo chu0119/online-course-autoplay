@@ -338,17 +338,9 @@
         var video = getVideo();
         if (video && video.paused && !video.ended) {
             log('视频暂停中，尝试播放');
-            // 先静音绕过浏览器autoplay限制，播放成功后恢复声音
             video.muted = true;
-            video.play().then(function() {
-                setTimeout(function() { video.muted = false; }, 200);
-            }).catch(function(e) {
+            video.play().catch(function(e) {
                 log('静音播放也失败: ' + e.message);
-                // 最后尝试点击播放按钮
-                setTimeout(function() {
-                    var startBtn = document.querySelector('.xgplayer-start');
-                    if (startBtn) startBtn.click();
-                }, 500);
             });
         }
     }
@@ -542,19 +534,12 @@
                     }
                 } else {
                     log('当前集未完成，正常播放中...');
-                    // 如果视频暂停，尝试播放
+                    // 如果视频暂停，静音播放
                     var video = getVideo();
                     if (video && video.paused) {
-                        log('启动时视频暂停，尝试播放');
+                        log('启动时视频暂停，静音播放');
                         video.muted = true;
-                        video.play().then(function() {
-                            setTimeout(function() { video.muted = false; }, 200);
-                        }).catch(function() {
-                            setTimeout(function() {
-                                var startBtn = document.querySelector('.xgplayer-start');
-                                if (startBtn) startBtn.click();
-                            }, 500);
-                        });
+                        video.play().catch(function() {});
                     }
                 }
             }
