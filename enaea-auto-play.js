@@ -269,10 +269,16 @@
     }
 
     function getCourseTitle() {
-        var el = document.querySelector('.CB-BA-course-title')
-              || document.querySelector('.course-view-toolbar .cvtb-top-list-item')
-              || document.querySelector('.cvtb-top-list-item');
-        if (el) return (el.textContent || '').trim().substring(0, 40);
+        var selectors = [
+            '.cvtb-top-list-item',
+            '.CB-BA-course-title',
+            '.course-view-toolbar .cvtb-top-list-item'
+        ];
+        for (var i = 0; i < selectors.length; i++) {
+            var el = document.querySelector(selectors[i]);
+            var text = el ? (el.textContent || '').trim() : '';
+            if (text.length > 0 && text.length < 100) return text.substring(0, 40);
+        }
         return '';
     }
 
