@@ -337,15 +337,27 @@
         // 视频暂停了就自动播放（只为积累观看时长）
         var video = getVideo();
         if (video && video.paused && !video.ended) {
-            video.play().catch(function() {
-                var startBtn = document.querySelector('.xgplayer-start');
-                var playBtn = document.querySelector('.xgplayer-play');
-                if (startBtn && startBtn.offsetHeight > 0) {
-                    startBtn.click();
-                } else if (playBtn) {
-                    playBtn.click();
-                }
-            });
+            log('视频暂停中，尝试播放');
+            // 方法1: 直接 play()
+            var playOk = false;
+            var p = video.play();
+            if (p && p.then) {
+                p.then(function() { playOk = true; }).catch(function(e) {
+                    log('play()失败: ' + e.message);
+                    // 方法2: 点击播放按钮
+                    setTimeout(function() {
+                        var startBtn = document.querySelector('.xgplayer-start');
+                        var playBtn = document.querySelector('.xgplayer-play');
+                        if (startBtn && startBtn.offsetHeight > 0) {
+                            log('点击 xgplayer-start');
+                            startBtn.click();
+                        } else if (playBtn) {
+                            log('点击 xgplayer-play');
+                            playBtn.click();
+                        }
+                    }, 500);
+                });
+            }
         }
     }
 
@@ -538,13 +550,19 @@
                     }
                 } else {
                     log('当前集未完成，正常播放中...');
-                    // 如果当前集进度<100但视频暂停，尝试播放
+                    // 如果视频暂停，尝试播放
                     var video = getVideo();
                     if (video && video.paused) {
-                        log('视频暂停中，尝试自动播放');
+                        log('启动时视频暂停，尝试播放');
                         video.play().catch(function() {
-                            var btn = document.querySelector('.xgplayer-start') || document.querySelector('.xgplayer-play');
-                            if (btn) btn.click();
+                            setTimeout(function() {
+                                var startBtn = document.querySelector('.xgplayer-start');
+                                if (startBtn && startBtn.offsetHeight > 0) startBtn.click();
+                                else {
+                                    var playBtn = document.querySelector('.xgplayer-play');
+                                    if (playBtn) playBtn.click();
+                                }
+                            }, 500);
                         });
                     }
                 }
