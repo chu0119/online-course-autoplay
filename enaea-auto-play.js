@@ -1,0 +1,474 @@
+// ==UserScript==
+// @name         Online Course Auto-Play Assistant
+// @namespace    online-course-autoplay
+// @version      2.0
+// @description  Auto-play next episode when current one finishes, with a floating progress panel
+// @match        https://study.enaea.edu.cn/viewerforccvideo*
+// @match        https://study.enaea.edu.cn/viewerforicourse*
+// @match        https://study.enaea.edu.cn/circleIndexRedirect*
+// @grant        none
+// @run-at       document-idle
+// @license      MIT
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    // ============ 配置 ============
+    var SPEED = 1;
+    var CHECK_MS = 5000;
+    var SWITCH_DELAY = 2000;
+
+    var switching = false;
+    var courseDoneCount = parseInt(localStorage.getItem('eap_done_count') || '0');
+
+    function log(msg) {
+        console.log('%c[自动连播] ' + msg, 'color: #22c55e; font-weight: bold');
+    }
+
+    // ============ 页面类型判断 ============
+    var path = location.pathname;
+    var isVideoPage = path.indexOf('viewerforccvideo') > -1 || path.indexOf('viewerforicourse') > -1;
+    var isListPage = path.indexOf('circleIndexRedirect') > -1;
+
+    // ================================================================
+    //  GUI 面板
+    // ================================================================
+
+    var panel = null;
+    var panelContent = null;
+
+    function createPanel() {
+        if (document.getElementById('eap-panel')) return;
+
+        var savedPos = JSON.parse(localStorage.getItem('eap_panel_pos') || '{}');
+
+        panel = document.createElement('div');
+        panel.id = 'eap-panel';
+        panel.innerHTML =
+            '<div id="eap-header">' +
+            '  <span id="eap-title">ENAEA 自动连播</span>' +
+            '  <span id="eap-controls">' +
+            '    <span id="eap-min" title="最小化">−</span>' +
+            '  </span>' +
+            '</div>' +
+            '<div id="eap-body"></div>';
+
+        var s = document.createElement('style');
+        s.textContent = [
+            '#eap-panel{position:fixed;z-index:999999;width:260px;font-family:"Microsoft YaHei",sans-serif;font-size:13px;color:#e2e8f0;border-radius:10px;overflow:hidden;box-shadow:0 8px 30px rgba(0,0,0,.45);background:linear-gradient(145deg,#1e293b 0%,#0f172a 100%);border:1px solid rgba(255,255,255,.08)}',
+            '#eap-panel *{margin:0;padding:0;box-sizing:border-box}',
+            '#eap-header{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:rgba(0,0,0,.25);cursor:move;user-select:none}',
+            '#eap-title{font-weight:600;font-size:14px;color:#22c55e}',
+            '#eap-controls span{cursor:pointer;margin-left:8px;font-size:16px;color:#94a3b8;width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;border-radius:4px}',
+            '#eap-controls span:hover{background:rgba(255,255,255,.1);color:#fff}',
+            '#eap-body{padding:12px 14px;max-height:400px;overflow-y:auto}',
+            '#eap-body::-webkit-scrollbar{width:4px}',
+            '#eap-body::-webkit-scrollbar-thumb{background:rgba(255,255,255,.15);border-radius:2px}',
+            '.eap-course-name{font-size:13px;font-weight:600;color:#f1f5f9;margin-bottom:8px;line-height:1.3;word-break:break-all}',
+            '.eap-section-label{font-size:11px;color:#64748b;margin:8px 0 4px;text-transform:uppercase;letter-spacing:.5px}',
+            '.eap-ep{display:flex;align-items:center;padding:5px 8px;margin:2px 0;border-radius:5px;font-size:12px;transition:background .2s}',
+            '.eap-ep.is-current{background:rgba(34,197,94,.12)}',
+            '.eap-ep.is-done{opacity:.55}',
+            '.eap-ep-icon{width:18px;text-align:center;flex-shrink:0}',
+            '.eap-ep-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin:0 6px;color:#cbd5e1}',
+            '.eap-ep.is-current .eap-ep-name{color:#22c55e}',
+            '.eap-ep-pct{flex-shrink:0;font-size:11px;color:#64748b;min-width:32px;text-align:right}',
+            '.eap-ep.is-current .eap-ep-pct{color:#22c55e}',
+            '.eap-ep.is-done .eap-ep-pct{color:#22c55e}',
+            '.eap-bar-wrap{height:6px;background:rgba(255,255,255,.06);border-radius:3px;margin:8px 0 4px;overflow:hidden}',
+            '.eap-bar-fill{height:100%;background:linear-gradient(90deg,#22c55e,#4ade80);border-radius:3px;transition:width .5s ease}',
+            '.eap-stat{font-size:11px;color:#64748b;display:flex;justify-content:space-between}',
+            '.eap-status{text-align:center;padding:16px 0;font-size:13px;color:#94a3b8}',
+            '.eap-status .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#22c55e;margin-right:6px;animation:eap-pulse 1.5s infinite}',
+            '@keyframes eap-pulse{0%,100%{opacity:1}50%{opacity:.3}}',
+            '.eap-course-ep{display:flex;align-items:center;padding:5px 8px;margin:2px 0;border-radius:5px;font-size:12px}',
+            '.eap-course-name-list{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#cbd5e1;margin:0 6px}',
+            '.eap-course-pct{flex-shrink:0;font-size:11px;color:#64748b;min-width:32px;text-align:right}'
+        ].join('\n');
+        document.documentElement.appendChild(s);
+        document.body.appendChild(panel);
+
+        panel.style.top = (savedPos.top || 20) + 'px';
+        panel.style.left = (savedPos.left || 20) + 'px';
+
+        panelContent = document.getElementById('eap-body');
+
+        // 拖拽
+        var dragging = false, ox = 0, oy = 0;
+        var header = document.getElementById('eap-header');
+        header.addEventListener('mousedown', function(e) {
+            if (e.target.id === 'eap-min') return;
+            dragging = true;
+            ox = e.clientX - panel.offsetLeft;
+            oy = e.clientY - panel.offsetTop;
+            e.preventDefault();
+        });
+        document.addEventListener('mousemove', function(e) {
+            if (!dragging) return;
+            panel.style.left = (e.clientX - ox) + 'px';
+            panel.style.top = (e.clientY - oy) + 'px';
+            panel.style.right = 'auto';
+        });
+        document.addEventListener('mouseup', function() {
+            if (dragging) {
+                dragging = false;
+                localStorage.setItem('eap_panel_pos', JSON.stringify({ top: panel.offsetTop, left: panel.offsetLeft }));
+            }
+        });
+
+        // 最小化
+        var minimized = false;
+        var minBtn = document.getElementById('eap-min');
+        minBtn.addEventListener('click', function() {
+            minimized = !minimized;
+            panelContent.style.display = minimized ? 'none' : 'block';
+            minBtn.textContent = minimized ? '+' : '−';
+        });
+    }
+
+    // 渲染视频播放页面板
+    function renderVideoPanel(episodes, courseTitle) {
+        if (!panelContent) return;
+
+        var done = 0, total = episodes.length, curIdx = -1;
+        episodes.forEach(function(ep, i) {
+            if (ep.progress >= 100) done++;
+            if (ep.isCurrent) curIdx = i;
+        });
+        var pct = total > 0 ? Math.round(done / total * 100) : 0;
+
+        var video = document.querySelector('video');
+        var curTime = video ? formatTime(video.currentTime) : '--:--';
+        var durTime = video ? formatTime(video.duration) : '--:--';
+
+        var html = '';
+
+        // 课程名称
+        html += '<div class="eap-course-name">' + (courseTitle || '加载中...') + '</div>';
+
+        // 分集列表
+        html += '<div class="eap-section-label">分集列表</div>';
+        episodes.forEach(function(ep) {
+            var cls = 'eap-ep';
+            if (ep.isCurrent) cls += ' is-current';
+            if (ep.progress >= 100) cls += ' is-done';
+
+            var icon = ep.isCurrent ? '<span style="color:#22c55e">▶</span>'
+                     : ep.progress >= 100 ? '<span style="color:#22c55e">✓</span>'
+                     : '<span style="color:#475569">○</span>';
+
+            var timeInfo = '';
+            if (ep.isCurrent && video && video.duration > 0) {
+                timeInfo = curTime + '/' + durTime;
+            }
+
+            html += '<div class="' + cls + '">';
+            html += '  <span class="eap-ep-icon">' + icon + '</span>';
+            html += '  <span class="eap-ep-name">' + ep.title + '</span>';
+            html += '  <span class="eap-ep-pct">' + (timeInfo || ep.progress + '%') + '</span>';
+            html += '</div>';
+        });
+
+        // 进度条
+        html += '<div class="eap-bar-wrap"><div class="eap-bar-fill" style="width:' + pct + '%"></div></div>';
+        html += '<div class="eap-stat"><span>已完成 ' + done + '/' + total + ' 集</span><span>' + pct + '%</span></div>';
+
+        // 状态
+        var nextEp = null;
+        for (var i = 0; i < episodes.length; i++) {
+            if (episodes[i].progress < 100) { nextEp = episodes[i]; break; }
+        }
+        html += '<div class="eap-section-label">状态</div>';
+        if (nextEp && !switching) {
+            html += '<div style="font-size:12px;color:#94a3b8;padding:4px 0"><span class="dot"></span>播放中，下一集：' + nextEp.title + '</div>';
+        } else if (switching) {
+            html += '<div style="font-size:12px;color:#facc15;padding:4px 0">切换中...</div>';
+        } else {
+            html += '<div style="font-size:12px;color:#22c55e;padding:4px 0">本课程已完成，即将跳转下一门...</div>';
+        }
+
+        panelContent.innerHTML = html;
+    }
+
+    // 渲染课程列表面板
+    function renderListPanel(status) {
+        if (!panelContent) return;
+
+        var html = '<div class="eap-status"><span class="dot"></span>' + (status || '正在查找未完成课程...') + '</div>';
+        html += '<div class="eap-section-label">统计</div>';
+        html += '<div style="font-size:12px;color:#94a3b8;padding:4px 0">已连续完成: ' + courseDoneCount + ' 门课程</div>';
+
+        panelContent.innerHTML = html;
+    }
+
+    function formatTime(s) {
+        if (!s || isNaN(s) || !isFinite(s)) return '--:--';
+        var m = Math.floor(s / 60);
+        var sec = Math.floor(s % 60);
+        return (m < 10 ? '0' : '') + m + ':' + (sec < 10 ? '0' : '') + sec;
+    }
+
+    // ================================================================
+    //  视频播放页逻辑
+    // ================================================================
+
+    function getEpisodes() {
+        var items = document.querySelectorAll('li.cvtb-MCK-course-content');
+        var eps = [];
+        items.forEach(function(li, i) {
+            var pEl = li.querySelector('.cvtb-MCK-CsCt-studyProgress');
+            var progress = pEl ? (parseInt(pEl.textContent) || 0) : 0;
+            // 提取标题：去掉时间和百分比
+            var raw = (li.textContent || '').trim();
+            var title = raw.replace(/\d{2}:\d{2}:\d{2}/, '').replace(/\d+%/g, '').replace(/https?:\S*/g, '').trim();
+            // 只取第一个换行或50字符内的内容
+            title = title.split('\n')[0].substring(0, 30);
+            if (!title) title = '第' + (i + 1) + '集';
+            eps.push({
+                li: li,
+                progressEl: pEl,
+                progress: progress,
+                title: title,
+                isCurrent: li.classList.contains('current'),
+                index: i
+            });
+        });
+        return eps;
+    }
+
+    function getCourseTitle() {
+        // 尝试多个位置获取课程名
+        var el = document.querySelector('.CB-BA-course-title')
+              || document.querySelector('.course-view-toolbar .cvtb-top-list-item')
+              || document.querySelector('.cvtb-top-list-item');
+        if (el) return (el.textContent || '').trim().substring(0, 40);
+        return '';
+    }
+
+    function switchToEpisode(ep) {
+        if (switching) return;
+        switching = true;
+        log('切换到: ' + ep.title);
+        ep.li.click();
+        // 备选：点击进度元素
+        setTimeout(function() {
+            if (!ep.li.classList.contains('current')) {
+                log('点击li未生效，尝试进度元素');
+                if (ep.progressEl) ep.progressEl.click();
+            }
+        }, 500);
+        // 恢复标记
+        setTimeout(function() { switching = false; }, SWITCH_DELAY + 1000);
+    }
+
+    function courseAllDone() {
+        log('本课程全部完成！');
+        courseDoneCount++;
+        localStorage.setItem('eap_done_count', courseDoneCount.toString());
+        // 发送完成信号
+        localStorage.setItem('eap_course_done', JSON.stringify({ ts: Date.now(), url: location.href }));
+        // 跳转回课程列表
+        var circleId = new URLSearchParams(location.search).get('circleId');
+        if (circleId) {
+            setTimeout(function() {
+                location.href = '/circleIndexRedirect.do?circleId=' + circleId;
+            }, 3000);
+        }
+    }
+
+    // 视频页主循环
+    function videoPageLoop() {
+        // 弹窗
+        dismissDialogs();
+        // 倍速
+        applySpeed();
+
+        var episodes = getEpisodes();
+        if (episodes.length === 0) return;
+
+        var courseTitle = getCourseTitle();
+        var current = null;
+        for (var i = 0; i < episodes.length; i++) {
+            if (episodes[i].isCurrent) { current = episodes[i]; break; }
+        }
+
+        // 更新面板
+        renderVideoPanel(episodes, courseTitle);
+
+        if (!current || switching) return;
+
+        // 判断当前集是否完成
+        var video = document.querySelector('video');
+        var videoEnded = video && (video.ended || (video.duration > 0 && video.currentTime >= video.duration - 2));
+        var progressDone = current.progress >= 100;
+
+        if (!videoEnded && !progressDone) return;
+
+        log('"' + current.title + '" 已完成');
+
+        // 找下一个未完成的
+        var next = null;
+        // 优先当前之后
+        for (var j = current.index + 1; j < episodes.length; j++) {
+            if (episodes[j].progress < 100) { next = episodes[j]; break; }
+        }
+        // 没有则从头找
+        if (!next) {
+            for (var k = 0; k < episodes.length; k++) {
+                if (episodes[k].progress < 100) { next = episodes[k]; break; }
+            }
+        }
+
+        if (next) {
+            setTimeout(function() { switchToEpisode(next); }, SWITCH_DELAY);
+        } else {
+            courseAllDone();
+        }
+    }
+
+    // ================================================================
+    //  课程列表页逻辑
+    // ================================================================
+
+    function listPageLoop() {
+        // 监听完成信号
+        var signal = localStorage.getItem('eap_course_done');
+        if (signal) {
+            try {
+                var data = JSON.parse(signal);
+                if (Date.now() - data.ts < 30000) {
+                    localStorage.removeItem('eap_course_done');
+                    log('收到课程完成信号，刷新页面选下一门');
+                    setTimeout(function() { location.reload(); }, 2000);
+                    renderListPanel('课程已完成，正在刷新...');
+                    return;
+                }
+            } catch(e) {}
+        }
+
+        // 切到未完成tab
+        var tabs = document.querySelectorAll('.customcur-tab-text');
+        if (tabs.length > 1) {
+            tabs[1].click();
+        }
+
+        // 查找课程列表
+        var rows = document.querySelectorAll('#J_myOptionRecords tbody tr');
+        if (rows.length === 0) {
+            renderListPanel('等待课程列表加载...');
+            return;
+        }
+
+        var courses = [];
+        rows.forEach(function(row) {
+            var pEl = row.querySelector('.progressvalue');
+            var tEl = row.querySelector('.course-title');
+            var btn = row.querySelector('a.golearn');
+            if (!pEl || !btn) return;
+            var pct = parseInt(pEl.textContent) || 0;
+            var title = tEl ? (tEl.getAttribute('title') || tEl.textContent.trim()) : '';
+            title = title.substring(0, 35);
+            courses.push({ row: row, pct: pct, title: title, btn: btn });
+        });
+
+        if (courses.length === 0) {
+            renderListPanel('未找到课程');
+            return;
+        }
+
+        // 更新面板
+        var html = '<div class="eap-section-label">课程列表 (' + courses.length + '门)</div>';
+        courses.forEach(function(c) {
+            var icon = c.pct >= 100 ? '<span style="color:#22c55e">✓</span>' : '<span style="color:#facc15">○</span>';
+            html += '<div class="eap-course-ep">';
+            html += '  <span class="eap-ep-icon">' + icon + '</span>';
+            html += '  <span class="eap-course-name-list">' + c.title + '</span>';
+            html += '  <span class="eap-course-pct">' + c.pct + '%</span>';
+            html += '</div>';
+        });
+        html += '<div class="eap-section-label" style="margin-top:8px">统计</div>';
+        html += '<div style="font-size:12px;color:#94a3b8;padding:4px 0">已连续完成: ' + courseDoneCount + ' 门课程</div>';
+
+        if (panelContent) panelContent.innerHTML = html;
+
+        // 自动选择第一个未完成课程
+        var unfinished = null;
+        for (var i = 0; i < courses.length; i++) {
+            if (courses[i].pct < 100) { unfinished = courses[i]; break; }
+        }
+
+        if (unfinished) {
+            log('自动选择课程: ' + unfinished.title);
+            setTimeout(function() {
+                unfinished.btn.click();
+            }, 2000);
+        } else {
+            // 检查翻页
+            var nextBtn = document.querySelector('#J_myOptionRecords_next');
+            if (nextBtn && !nextBtn.classList.contains('paginate_button_disabled')) {
+                log('当前页全部完成，翻页...');
+                nextBtn.click();
+            } else {
+                log('所有课程已完成！');
+                renderListPanel('所有课程已完成！');
+            }
+        }
+    }
+
+    // ================================================================
+    //  通用功能
+    // ================================================================
+
+    function dismissDialogs() {
+        var btns = document.querySelectorAll('button');
+        for (var i = 0; i < btns.length; i++) {
+            var t = btns[i].textContent.trim();
+            if ((t === '继续学习' || t === '继续' || t === '确定') && btns[i].offsetHeight > 0) {
+                btns[i].click();
+                log('关闭弹窗: ' + t);
+                return;
+            }
+        }
+        var dc = document.querySelector('.dialog-content');
+        if (dc && dc.textContent.indexOf('异常') > -1) {
+            log('异常弹窗，刷新');
+            location.reload();
+        }
+    }
+
+    function applySpeed() {
+        if (SPEED <= 1) return;
+        var v = document.querySelector('video');
+        if (v && v.playbackRate !== SPEED) v.playbackRate = SPEED;
+    }
+
+    if (SPEED > 1) {
+        var d = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'playbackRate');
+        Object.defineProperty(HTMLMediaElement.prototype, 'playbackRate', {
+            get: d.get,
+            set: function(v) { d.set.call(this, SPEED); },
+            configurable: true
+        });
+    }
+
+    // ================================================================
+    //  启动
+    // ================================================================
+
+    log('脚本启动 | 页面: ' + (isVideoPage ? '播放页' : isListPage ? '列表页' : '未知'));
+
+    // 等页面加载
+    setTimeout(function() {
+        createPanel();
+
+        if (isVideoPage) {
+            setInterval(videoPageLoop, CHECK_MS);
+            videoPageLoop();
+        } else if (isListPage) {
+            setInterval(listPageLoop, CHECK_MS);
+            listPageLoop();
+        }
+    }, 3000);
+
+})();
