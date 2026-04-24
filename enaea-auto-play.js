@@ -7,6 +7,7 @@
 // @match        https://study.enaea.edu.cn/viewerforicourse*
 // @match        https://study.enaea.edu.cn/circleIndexRedirect*
 // @match        https://study.enaea.edu.cn/securitySettingsRedirect*
+// @match        https://study.enaea.edu.cn/studyCenterRedirect*
 // @grant        none
 // @run-at       document-idle
 // @license      MIT
@@ -39,6 +40,7 @@
     var isVideoPage = path.indexOf('viewerforccvideo') > -1 || path.indexOf('viewerforicourse') > -1;
     var isListPage = path.indexOf('circleIndexRedirect') > -1;
     var isSecurityPage = path.indexOf('securitySettingsRedirect') > -1;
+    var isStudyCenterPage = path.indexOf('studyCenterRedirect') > -1;
 
     // ============ 获取视频元素（精确选择器） ============
     function getVideo() {
@@ -497,10 +499,10 @@
     //  启动
     // ================================================================
 
-    log('脚本启动 v2.3 | 页面: ' + (isVideoPage ? '播放页' : isListPage ? '列表页' : isSecurityPage ? '验证页' : '未知'));
+    log('脚本启动 v2.3 | 页面: ' + (isVideoPage ? '播放页' : isListPage ? '列表页' : (isSecurityPage || isStudyCenterPage) ? '验证页' : '未知'));
 
-    // 安全验证页：自动点击"进入学习"
-    if (isSecurityPage) {
+    // 安全验证页/学习中心页：自动点击"进入学习"
+    if (isSecurityPage || isStudyCenterPage) {
         log('检测到安全验证页，等待按钮...');
         var securityInterval = setInterval(function() {
             var btns = document.querySelectorAll('button, a, input[type="button"]');
