@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Online Course Auto-Play Assistant
 // @namespace    online-course-autoplay
-// @version      2.0
+// @version      2.1
 // @description  Auto-play next episode when current one finishes, with a floating progress panel
 // @match        https://study.enaea.edu.cn/viewerforccvideo*
 // @match        https://study.enaea.edu.cn/viewerforicourse*
@@ -21,17 +21,28 @@
 
     var switching = false;
     var courseDoneCount = parseInt(localStorage.getItem('eap_done_count') || '0');
-    var videoHasPlayed = false;       // 标记：本轮是否真正开始播放过视频
-    var currentEpisodeId = null;      // 追踪当前集ID，防止重复切换
+    var videoHasPlayed = false;
+    var courseDoneFired = false;       // guard: courseAllDone 只调用一次
 
     function log(msg) {
         console.log('%c[自动连播] ' + msg, 'color: #22c55e; font-weight: bold');
+    }
+
+    function esc(str) {
+        var d = document.createElement('div');
+        d.textContent = str;
+        return d.innerHTML;
     }
 
     // ============ 页面类型判断 ============
     var path = location.pathname;
     var isVideoPage = path.indexOf('viewerforccvideo') > -1 || path.indexOf('viewerforicourse') > -1;
     var isListPage = path.indexOf('circleIndexRedirect') > -1;
+
+    // ============ 获取视频元素（精确选择器） ============
+    function getVideo() {
+        return document.querySelector('#J_CC_videoPlayerDiv video') || document.querySelector('video');
+    }
 
     // ================================================================
     //  GUI 面板
@@ -68,14 +79,14 @@
             '#eap-body::-webkit-scrollbar{width:4px}',
             '#eap-body::-webkit-scrollbar-thumb{background:rgba(255,255,255,.15);border-radius:2px}',
             '.eap-course-name{font-size:13px;font-weight:600;color:#f1f5f9;margin-bottom:8px;line-height:1.3;word-break:break-all}',
-            '.eap-section-label{font-size:11px;color:#64748b;margin:8px 0 4px;text-transform:uppercase;letter-spacing:.5px}',
+            '.eap-section-label{font-size:11px;color:#64748b;margin:8px 0 4px;letter-spacing:.5px}',
             '.eap-ep{display:flex;align-items:center;padding:5px 8px;margin:2px 0;border-radius:5px;font-size:12px;transition:background .2s}',
             '.eap-ep.is-current{background:rgba(34,197,94,.12)}',
             '.eap-ep.is-done{opacity:.55}',
             '.eap-ep-icon{width:18px;text-align:center;flex-shrink:0}',
             '.eap-ep-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin:0 6px;color:#cbd5e1}',
             '.eap-ep.is-current .eap-ep-name{color:#22c55e}',
-            '.eap-ep-pct{flex-shrink:0;font-size:11px;color:#64748b;min-width:32px;text-align:right}',
+            '.eap-ep-pct{flex-shrink:0;font-size:11px;color:#64748b;min-width:36px;text-align:right}',
             '.eap-ep.is-current .eap-ep-pct{color:#22c55e}',
             '.eap-ep.is-done .eap-ep-pct{color:#22c55e}',
             '.eap-bar-wrap{height:6px;background:rgba(255,255,255,.06);border-radius:3px;margin:8px 0 4px;overflow:hidden}',
@@ -86,7 +97,7 @@
             '@keyframes eap-pulse{0%,100%{opacity:1}50%{opacity:.3}}',
             '.eap-course-ep{display:flex;align-items:center;padding:5px 8px;margin:2px 0;border-radius:5px;font-size:12px}',
             '.eap-course-name-list{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#cbd5e1;margin:0 6px}',
-            '.eap-course-pct{flex-shrink:0;font-size:11px;color:#64748b;min-width:32px;text-align:right}'
+            '.eap-course-pct{flex-shrink:0;font-size:11px;color:#64748b;min-width:36px;text-align:right}'
         ].join('\n');
         document.documentElement.appendChild(s);
         document.body.appendChild(panel);
@@ -133,23 +144,20 @@
     function renderVideoPanel(episodes, courseTitle) {
         if (!panelContent) return;
 
-        var done = 0, total = episodes.length, curIdx = -1;
-        episodes.forEach(function(ep, i) {
+        var done = 0, total = episodes.length;
+        episodes.forEach(function(ep) {
             if (ep.progress >= 100) done++;
-            if (ep.isCurrent) curIdx = i;
         });
         var pct = total > 0 ? Math.round(done / total * 100) : 0;
 
-        var video = document.querySelector('video');
+        var video = getVideo();
         var curTime = video ? formatTime(video.currentTime) : '--:--';
-        var durTime = video ? formatTime(video.duration) : '--:--';
+        var durTime = (video && video.duration > 0) ? formatTime(video.duration) : '--:--';
 
         var html = '';
 
-        // 课程名称
-        html += '<div class="eap-course-name">' + (courseTitle || '加载中...') + '</div>';
+        html += '<div class="eap-course-name">' + esc(courseTitle || '加载中...') + '</div>';
 
-        // 分集列表
         html += '<div class="eap-section-label">分集列表</div>';
         episodes.forEach(function(ep) {
             var cls = 'eap-ep';
@@ -167,25 +175,26 @@
 
             html += '<div class="' + cls + '">';
             html += '  <span class="eap-ep-icon">' + icon + '</span>';
-            html += '  <span class="eap-ep-name">' + ep.title + '</span>';
+            html += '  <span class="eap-ep-name">' + esc(ep.title) + '</span>';
             html += '  <span class="eap-ep-pct">' + (timeInfo || ep.progress + '%') + '</span>';
             html += '</div>';
         });
 
-        // 进度条
         html += '<div class="eap-bar-wrap"><div class="eap-bar-fill" style="width:' + pct + '%"></div></div>';
         html += '<div class="eap-stat"><span>已完成 ' + done + '/' + total + ' 集</span><span>' + pct + '%</span></div>';
 
-        // 状态
+        // 状态行
         var nextEp = null;
         for (var i = 0; i < episodes.length; i++) {
             if (episodes[i].progress < 100) { nextEp = episodes[i]; break; }
         }
         html += '<div class="eap-section-label">状态</div>';
-        if (nextEp && !switching) {
-            html += '<div style="font-size:12px;color:#94a3b8;padding:4px 0"><span class="dot"></span>播放中，下一集：' + nextEp.title + '</div>';
+        if (courseDoneFired) {
+            html += '<div style="font-size:12px;color:#22c55e;padding:4px 0">本课程已完成，即将跳转下一门...</div>';
         } else if (switching) {
             html += '<div style="font-size:12px;color:#facc15;padding:4px 0">切换中...</div>';
+        } else if (nextEp) {
+            html += '<div style="font-size:12px;color:#94a3b8;padding:4px 0"><span class="dot"></span>播放中，下一集：' + esc(nextEp.title) + '</div>';
         } else {
             html += '<div style="font-size:12px;color:#22c55e;padding:4px 0">本课程已完成，即将跳转下一门...</div>';
         }
@@ -197,8 +206,26 @@
     function renderListPanel(status) {
         if (!panelContent) return;
 
-        var html = '<div class="eap-status"><span class="dot"></span>' + (status || '正在查找未完成课程...') + '</div>';
+        var html = '<div class="eap-status"><span class="dot"></span>' + esc(status || '正在查找未完成课程...') + '</div>';
         html += '<div class="eap-section-label">统计</div>';
+        html += '<div style="font-size:12px;color:#94a3b8;padding:4px 0">已连续完成: ' + courseDoneCount + ' 门课程</div>';
+
+        panelContent.innerHTML = html;
+    }
+
+    function renderListPanelCourses(courses) {
+        if (!panelContent) return;
+
+        var html = '<div class="eap-section-label">课程列表 (' + courses.length + '门)</div>';
+        courses.forEach(function(c) {
+            var icon = c.pct >= 100 ? '<span style="color:#22c55e">✓</span>' : '<span style="color:#facc15">○</span>';
+            html += '<div class="eap-course-ep">';
+            html += '  <span class="eap-ep-icon">' + icon + '</span>';
+            html += '  <span class="eap-course-name-list">' + esc(c.title) + '</span>';
+            html += '  <span class="eap-course-pct">' + c.pct + '%</span>';
+            html += '</div>';
+        });
+        html += '<div class="eap-section-label" style="margin-top:8px">统计</div>';
         html += '<div style="font-size:12px;color:#94a3b8;padding:4px 0">已连续完成: ' + courseDoneCount + ' 门课程</div>';
 
         panelContent.innerHTML = html;
@@ -206,8 +233,12 @@
 
     function formatTime(s) {
         if (!s || isNaN(s) || !isFinite(s)) return '--:--';
-        var m = Math.floor(s / 60);
+        var h = Math.floor(s / 3600);
+        var m = Math.floor((s % 3600) / 60);
         var sec = Math.floor(s % 60);
+        if (h > 0) {
+            return h + ':' + (m < 10 ? '0' : '') + m + ':' + (sec < 10 ? '0' : '') + sec;
+        }
         return (m < 10 ? '0' : '') + m + ':' + (sec < 10 ? '0' : '') + sec;
     }
 
@@ -221,10 +252,8 @@
         items.forEach(function(li, i) {
             var pEl = li.querySelector('.cvtb-MCK-CsCt-studyProgress');
             var progress = pEl ? (parseInt(pEl.textContent) || 0) : 0;
-            // 提取标题：去掉时间和百分比
             var raw = (li.textContent || '').trim();
-            var title = raw.replace(/\d{2}:\d{2}:\d{2}/, '').replace(/\d+%/g, '').replace(/https?:\S*/g, '').trim();
-            // 只取第一个换行或50字符内的内容
+            var title = raw.replace(/\d{2}:\d{2}:\d{2}/g, '').replace(/\d+%/g, '').replace(/https?:\S*/g, '').trim();
             title = title.split('\n')[0].substring(0, 30);
             if (!title) title = '第' + (i + 1) + '集';
             eps.push({
@@ -240,7 +269,6 @@
     }
 
     function getCourseTitle() {
-        // 尝试多个位置获取课程名
         var el = document.querySelector('.CB-BA-course-title')
               || document.querySelector('.course-view-toolbar .cvtb-top-list-item')
               || document.querySelector('.cvtb-top-list-item');
@@ -253,24 +281,22 @@
         switching = true;
         log('切换到: ' + ep.title);
         ep.li.click();
-        // 备选：点击进度元素
         setTimeout(function() {
             if (!ep.li.classList.contains('current')) {
                 log('点击li未生效，尝试进度元素');
                 if (ep.progressEl) ep.progressEl.click();
             }
         }, 500);
-        // 恢复标记
         setTimeout(function() { switching = false; }, SWITCH_DELAY + 1000);
     }
 
     function courseAllDone() {
+        if (courseDoneFired) return;
+        courseDoneFired = true;
         log('本课程全部完成！');
         courseDoneCount++;
         localStorage.setItem('eap_done_count', courseDoneCount.toString());
-        // 发送完成信号
         localStorage.setItem('eap_course_done', JSON.stringify({ ts: Date.now(), url: location.href }));
-        // 跳转回课程列表
         var circleId = new URLSearchParams(location.search).get('circleId');
         if (circleId) {
             setTimeout(function() {
@@ -279,11 +305,8 @@
         }
     }
 
-    // 视频页主循环
     function videoPageLoop() {
-        // 弹窗
         dismissDialogs();
-        // 倍速
         applySpeed();
 
         var episodes = getEpisodes();
@@ -295,22 +318,20 @@
             if (episodes[i].isCurrent) { current = episodes[i]; break; }
         }
 
-        // 更新面板（每次都刷新显示）
         renderVideoPanel(episodes, courseTitle);
 
-        if (!current || switching) return;
+        if (!current || switching || courseDoneFired) return;
 
-        var video = document.querySelector('video');
-        if (!video) return;
+        var video = getVideo();
+        if (!video || video.duration <= 0) return;
 
-        // 如果视频正在播放（currentTime > 0 且未暂停），标记为"已开始播放"
+        // 标记视频已开始播放
         if (video.currentTime > 1 && !video.paused) {
             videoHasPlayed = true;
         }
 
-        // 核心判断：只有视频在本次会话中真正播放过，并且播放到了结尾，才切换
-        // 不使用 progressDone（之前看过的100%不算），只用 videoEnded
-        var videoEnded = videoHasPlayed && video.ended;
+        // 只有本次会话真正播放过，且播放到了结尾才切换
+        var videoEnded = videoHasPlayed && (video.ended || video.currentTime >= video.duration - 1);
 
         if (!videoEnded) return;
 
@@ -328,7 +349,6 @@
         }
 
         if (next) {
-            // 重置播放标记，等待新一集开始
             videoHasPlayed = false;
             setTimeout(function() { switchToEpisode(next); }, SWITCH_DELAY);
         } else {
@@ -340,6 +360,9 @@
     //  课程列表页逻辑
     // ================================================================
 
+    var listTabClicked = false;
+    var listCourseClicked = false;
+
     function listPageLoop() {
         // 监听完成信号
         var signal = localStorage.getItem('eap_course_done');
@@ -349,17 +372,23 @@
                 if (Date.now() - data.ts < 30000) {
                     localStorage.removeItem('eap_course_done');
                     log('收到课程完成信号，刷新页面选下一门');
-                    setTimeout(function() { location.reload(); }, 2000);
                     renderListPanel('课程已完成，正在刷新...');
+                    setTimeout(function() { location.reload(); }, 2000);
                     return;
                 }
             } catch(e) {}
+            // 旧信号，清除
+            localStorage.removeItem('eap_course_done');
         }
 
-        // 切到未完成tab
-        var tabs = document.querySelectorAll('.customcur-tab-text');
-        if (tabs.length > 1) {
-            tabs[1].click();
+        // 切到未完成tab（只点一次）
+        if (!listTabClicked) {
+            var tabs = document.querySelectorAll('.customcur-tab-text');
+            if (tabs.length > 1) {
+                tabs[1].click();
+                listTabClicked = true;
+                log('已切换到未完成tab');
+            }
         }
 
         // 查找课程列表
@@ -386,37 +415,28 @@
             return;
         }
 
-        // 更新面板
-        var html = '<div class="eap-section-label">课程列表 (' + courses.length + '门)</div>';
-        courses.forEach(function(c) {
-            var icon = c.pct >= 100 ? '<span style="color:#22c55e">✓</span>' : '<span style="color:#facc15">○</span>';
-            html += '<div class="eap-course-ep">';
-            html += '  <span class="eap-ep-icon">' + icon + '</span>';
-            html += '  <span class="eap-course-name-list">' + c.title + '</span>';
-            html += '  <span class="eap-course-pct">' + c.pct + '%</span>';
-            html += '</div>';
-        });
-        html += '<div class="eap-section-label" style="margin-top:8px">统计</div>';
-        html += '<div style="font-size:12px;color:#94a3b8;padding:4px 0">已连续完成: ' + courseDoneCount + ' 门课程</div>';
+        renderListPanelCourses(courses);
 
-        if (panelContent) panelContent.innerHTML = html;
+        // 只自动选课一次
+        if (listCourseClicked) return;
 
-        // 自动选择第一个未完成课程
         var unfinished = null;
         for (var i = 0; i < courses.length; i++) {
             if (courses[i].pct < 100) { unfinished = courses[i]; break; }
         }
 
         if (unfinished) {
+            listCourseClicked = true;
             log('自动选择课程: ' + unfinished.title);
             setTimeout(function() {
                 unfinished.btn.click();
             }, 2000);
         } else {
-            // 检查翻页
             var nextBtn = document.querySelector('#J_myOptionRecords_next');
             if (nextBtn && !nextBtn.classList.contains('paginate_button_disabled')) {
                 log('当前页全部完成，翻页...');
+                listTabClicked = false;   // 翻页后需要重新点击tab
+                listCourseClicked = false; // 翻页后需要重新选课
                 nextBtn.click();
             } else {
                 log('所有课程已完成！');
@@ -430,12 +450,10 @@
     // ================================================================
 
     function dismissDialogs() {
-        // 只处理明确可见的弹窗按钮，不触发刷新
         var btns = document.querySelectorAll('button');
         for (var i = 0; i < btns.length; i++) {
             var t = btns[i].textContent.trim();
             if (t !== '继续学习') continue;
-            // 确保按钮是可见的弹窗里的，不是页面普通按钮
             var dialog = btns[i].closest('.el-dialog, .dialog-box, [role="dialog"]');
             if (dialog && dialog.offsetHeight > 0) {
                 btns[i].click();
@@ -447,7 +465,7 @@
 
     function applySpeed() {
         if (SPEED <= 1) return;
-        var v = document.querySelector('video');
+        var v = getVideo();
         if (v && v.playbackRate !== SPEED) v.playbackRate = SPEED;
     }
 
@@ -464,20 +482,16 @@
     //  启动
     // ================================================================
 
-    log('脚本启动 | 页面: ' + (isVideoPage ? '播放页' : isListPage ? '列表页' : '未知'));
+    log('脚本启动 v2.1 | 页面: ' + (isVideoPage ? '播放页' : isListPage ? '列表页' : '未知'));
 
-    // 等页面加载
     setTimeout(function() {
         createPanel();
 
         if (isVideoPage) {
-            // 不立即执行第一次检查，等视频开始播放后再检测
-            // 首次只更新面板显示
             var episodes = getEpisodes();
             var courseTitle = getCourseTitle();
             renderVideoPanel(episodes, courseTitle);
             log('首次面板已渲染，等待视频播放...');
-            // 10秒后才开始真正的自动检测循环，给视频足够加载时间
             setTimeout(function() {
                 log('自动检测循环启动');
                 setInterval(videoPageLoop, CHECK_MS);
